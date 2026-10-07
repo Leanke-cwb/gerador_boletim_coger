@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 import sqlite3
+import json
+from datetime import datetime
 from datetime import datetime
 import os
 import sys
@@ -95,6 +97,39 @@ def init_db():
         (id, assina_nome, assina_funcao, confere_nome, confere_funcao)
         VALUES (1, '', '', '', '')
     """)
+
+    # Rascunho único do boletim em edição.
+    # Fica salvo no perfil do usuário, fora da pasta do programa.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rascunho_boletim (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            dados_json TEXT NOT NULL,
+            atualizado_em TEXT NOT NULL
+        )
+    """)
+
+    # Histórico permanente dos boletins.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS boletins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero TEXT NOT NULL,
+            local TEXT,
+            data_inicio TEXT,
+            data_fim TEXT,
+            dados_json TEXT NOT NULL,
+            criado_em TEXT NOT NULL,
+            atualizado_em TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_boletins_numero
+        ON boletins(numero)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_boletins_periodo
+        ON boletins(data_inicio, data_fim)
+    """)
+
     con.commit()
     con.close()
 
@@ -121,6 +156,199 @@ def salvar_config(dados):
     """, dados)
     con.commit()
     con.close()
+
+
+
+def salvar_rascunho_db(dados):
+    payload = json.dumps(dados, ensure_ascii=False)
+    atualizado_em = datetime.now().isoformat(timespec="seconds")
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO rascunho_boletim (id, dados_json, atualizado_em)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            dados_json=excluded.dados_json,
+            atualizado_em=excluded.atualizado_em
+    """, (payload, atualizado_em))
+    con.commit()
+    con.close()
+    return atualizado_em
+
+
+def carregar_rascunho_db():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        SELECT dados_json, atualizado_em
+        FROM rascunho_boletim
+        WHERE id=1
+    """)
+    row = cur.fetchone()
+    con.close()
+
+    if not row:
+        return None, None
+
+    try:
+        return json.loads(row[0]), row[1]
+    except Exception:
+        return None, row[1]
+
+
+def excluir_rascunho_db():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("DELETE FROM rascunho_boletim WHERE id=1")
+    con.commit()
+    con.close()
+
+
+
+def salvar_boletim_db(dados, boletim_id=None):
+    """
+    Insere um novo boletim ou atualiza um boletim já aberto.
+    Retorna (id, atualizado_em).
+    """
+    agora = datetime.now().isoformat(timespec="seconds")
+    payload = json.dumps(dados, ensure_ascii=False)
+
+    numero = (dados.get("numero") or "").strip()
+    local = (dados.get("local") or "").strip()
+    data_inicio = (dados.get("data_inicio") or "").strip()
+    data_fim = (dados.get("data_fim") or "").strip()
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    if boletim_id:
+        cur.execute("""
+            UPDATE boletins
+            SET numero=?, local=?, data_inicio=?, data_fim=?,
+                dados_json=?, atualizado_em=?
+            WHERE id=?
+        """, (
+            numero, local, data_inicio, data_fim,
+            payload, agora, boletim_id
+        ))
+        if cur.rowcount == 0:
+            boletim_id = None
+
+    if not boletim_id:
+        cur.execute("""
+            INSERT INTO boletins
+            (numero, local, data_inicio, data_fim, dados_json, criado_em, atualizado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            numero, local, data_inicio, data_fim,
+            payload, agora, agora
+        ))
+        boletim_id = cur.lastrowid
+
+    con.commit()
+    con.close()
+    return boletim_id, agora
+
+
+def listar_boletins_db(filtro=""):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    filtro = (filtro or "").strip()
+    if filtro:
+        termo = f"%{filtro}%"
+        cur.execute("""
+            SELECT id, numero, local, data_inicio, data_fim, criado_em, atualizado_em
+            FROM boletins
+            WHERE numero LIKE ?
+               OR local LIKE ?
+               OR data_inicio LIKE ?
+               OR data_fim LIKE ?
+            ORDER BY atualizado_em DESC, id DESC
+        """, (termo, termo, termo, termo))
+    else:
+        cur.execute("""
+            SELECT id, numero, local, data_inicio, data_fim, criado_em, atualizado_em
+            FROM boletins
+            ORDER BY atualizado_em DESC, id DESC
+        """)
+
+    rows = cur.fetchall()
+    con.close()
+    return rows
+
+
+def carregar_boletim_db(boletim_id):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        SELECT dados_json
+        FROM boletins
+        WHERE id=?
+    """, (boletim_id,))
+    row = cur.fetchone()
+    con.close()
+
+    if not row:
+        return None
+
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return None
+
+
+def excluir_boletim_db(boletim_id):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("DELETE FROM boletins WHERE id=?", (boletim_id,))
+    con.commit()
+    con.close()
+
+
+def duplicar_boletim_db(boletim_id):
+    dados = carregar_boletim_db(boletim_id)
+    if not dados:
+        return None
+
+    # A cópia recebe um novo registro e pode ser alterada independentemente.
+    dados = json.loads(json.dumps(dados, ensure_ascii=False))
+    numero = (dados.get("numero") or "").strip()
+    dados["numero"] = numero
+
+    novo_id, _ = salvar_boletim_db(dados, boletim_id=None)
+    return novo_id
+
+
+def dados_documento_de_editor(dados_editor):
+    """
+    Converte o formato usado no editor/rascunho para o formato usado
+    pelos geradores DOCX/PDF.
+    """
+    assina_nome, assina_funcao, confere_nome, confere_funcao = carregar_config()
+    partes_editor = dados_editor.get("partes") or []
+
+    partes = []
+    for i in range(4):
+        bloco = partes_editor[i] if i < len(partes_editor) else {}
+        itens = bloco.get("itens") or []
+        partes.append({
+            "titulo": PARTES[i],
+            "itens": itens,
+        })
+
+    return {
+        "numero": (dados_editor.get("numero") or "").strip(),
+        "local": (dados_editor.get("local") or "").strip() or "Curitiba",
+        "data_inicio": (dados_editor.get("data_inicio") or "").strip(),
+        "data_fim": (dados_editor.get("data_fim") or "").strip(),
+        "partes": partes,
+        "assina_nome": assina_nome,
+        "assina_funcao": assina_funcao,
+        "confere_nome": confere_nome,
+        "confere_funcao": confere_funcao,
+    }
 
 
 def rotular_itens(itens):
@@ -577,6 +805,10 @@ class ParteView(ctk.CTkFrame):
 
         self._atualizar_lista(idx)
         self.limpar_campos()
+        try:
+            self.winfo_toplevel().salvar_rascunho(manual=False)
+        except Exception:
+            pass
 
     def editar_selecionado(self):
         idx = self._indice_selecionado()
@@ -819,6 +1051,10 @@ class ParteView(ctk.CTkFrame):
             return
         self.itens[idx], self.itens[novo] = self.itens[novo], self.itens[idx]
         self._atualizar_lista(novo)
+        try:
+            self.winfo_toplevel().salvar_rascunho(manual=False)
+        except Exception:
+            pass
 
     def remover(self):
         idx = self._indice_selecionado()
@@ -830,6 +1066,10 @@ class ParteView(ctk.CTkFrame):
         self.itens.pop(idx)
         self._atualizar_lista(min(idx, len(self.itens) - 1))
         self.limpar_campos()
+        try:
+            self.winfo_toplevel().salvar_rascunho(manual=False)
+        except Exception:
+            pass
 
     def limpar_campos(self):
         self.editando_indice = None
@@ -838,6 +1078,47 @@ class ParteView(ctk.CTkFrame):
         self.txt.delete("1.0", "end")
         self.btn_adicionar.configure(text="Adicionar publicação")
         self._atualizar_contador()
+
+    def exportar_rascunho(self):
+        """
+        Salva tanto as publicações já adicionadas quanto o texto que ainda está
+        sendo digitado no formulário e não foi adicionado.
+        """
+        return {
+            "itens": self.itens,
+            "editor": {
+                "nivel": self._nivel_atual(),
+                "titulo": self.ent_titulo.get(),
+                "texto": self.txt.get("1.0", "end-1c"),
+                "editando_indice": self.editando_indice,
+            },
+        }
+
+    def restaurar_rascunho(self, dados):
+        dados = dados or {}
+        self.itens = list(dados.get("itens") or [])
+        self._atualizar_lista()
+
+        editor = dados.get("editor") or {}
+        nivel = editor.get("nivel", "subtitulo")
+        self.cmb_nivel.set(NIVEIS[0] if nivel == "titulo" else NIVEIS[1])
+
+        self.ent_titulo.delete(0, "end")
+        self.ent_titulo.insert(0, editor.get("titulo", ""))
+
+        self.txt.delete("1.0", "end")
+        self.txt.insert("1.0", editor.get("texto", ""))
+
+        idx = editor.get("editando_indice")
+        if isinstance(idx, int) and 0 <= idx < len(self.itens):
+            self.editando_indice = idx
+            self.btn_adicionar.configure(text="Salvar alteração")
+        else:
+            self.editando_indice = None
+            self.btn_adicionar.configure(text="Adicionar publicação")
+
+        self._atualizar_contador()
+
 
     def obter_itens(self):
         return list(self.itens)
@@ -857,6 +1138,9 @@ class App(ctk.CTk):
         self.frames_partes = []
         self.nav_buttons = []
         self.parte_atual = 0
+        # None = boletim ainda não salvo no histórico.
+        # Inteiro = registro atualmente aberto para edição.
+        self.boletim_id_atual = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -870,6 +1154,14 @@ class App(ctk.CTk):
 
         self.mostrar_parte(0)
         self._atualizar_resumo()
+
+        # Recupera automaticamente o último trabalho salvo.
+        self._restaurar_rascunho_inicial()
+
+        # Salvamento automático periódico. Também salva ao fechar a janela.
+        self._autosave_job = None
+        self.protocol("WM_DELETE_WINDOW", self._ao_fechar)
+        self._agendar_autosalvamento()
 
     def _configurar_treeview(self):
         style = ttk.Style()
@@ -1001,8 +1293,56 @@ class App(ctk.CTk):
             command=self.verificar_ocr,
         ).grid(row=9, column=0, sticky="ew", padx=14, pady=2)
 
+        ctk.CTkButton(
+            self.sidebar,
+            text="Salvar boletim",
+            anchor="w",
+            height=38,
+            corner_radius=9,
+            fg_color="transparent",
+            hover_color=AZUL_HOVER,
+            text_color="white",
+            command=lambda: self.salvar_boletim(manual=True),
+        ).grid(row=10, column=0, sticky="ew", padx=14, pady=(10, 2))
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Boletins salvos",
+            anchor="w",
+            height=38,
+            corner_radius=9,
+            fg_color="transparent",
+            hover_color=AZUL_HOVER,
+            text_color="white",
+            command=self.abrir_historico,
+        ).grid(row=11, column=0, sticky="ew", padx=14, pady=2)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Salvar rascunho agora",
+            anchor="w",
+            height=38,
+            corner_radius=9,
+            fg_color="transparent",
+            hover_color=AZUL_HOVER,
+            text_color="white",
+            command=lambda: self.salvar_rascunho(manual=True),
+        ).grid(row=12, column=0, sticky="ew", padx=14, pady=2)
+
+        ctk.CTkButton(
+            self.sidebar,
+            text="Novo boletim",
+            anchor="w",
+            height=38,
+            corner_radius=9,
+            fg_color="transparent",
+            hover_color=AZUL_HOVER,
+            text_color="white",
+            command=self.novo_boletim,
+        ).grid(row=13, column=0, sticky="ew", padx=14, pady=2)
+
         rodape = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        rodape.grid(row=10, column=0, sticky="ew", padx=16, pady=18)
+        rodape.grid(row=14, column=0, sticky="ew", padx=16, pady=14)
         rodape.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -1155,6 +1495,449 @@ class App(ctk.CTk):
             command=lambda: self.gerar("ambos"),
         ).pack(side="left")
 
+    def _dados_rascunho(self):
+        return {
+            "versao": 1,
+            "numero": self.ent_numero.get().strip(),
+            "local": self.ent_local.get().strip(),
+            "data_inicio": self.ent_inicio.get().strip(),
+            "data_fim": self.ent_fim.get().strip(),
+            "parte_atual": self.parte_atual,
+            "partes": [frame.exportar_rascunho() for frame in self.frames_partes],
+        }
+
+    def salvar_rascunho(self, manual=False):
+        try:
+            atualizado = salvar_rascunho_db(self._dados_rascunho())
+            hora = datetime.fromisoformat(atualizado).strftime("%H:%M:%S")
+            if hasattr(self, "lbl_status"):
+                self.lbl_status.configure(text=f"Rascunho salvo automaticamente às {hora}.")
+            if manual:
+                messagebox.showinfo(
+                    "Rascunho salvo",
+                    "O boletim em edição foi salvo com sucesso.\n\n"
+                    "Se o programa fechar ou travar, ele será restaurado na próxima abertura."
+                )
+            return True
+        except Exception as e:
+            if manual:
+                messagebox.showerror("Erro ao salvar rascunho", str(e))
+            return False
+
+    def _agendar_autosalvamento(self):
+        # A cada 3 segundos. É um JSON pequeno gravado no SQLite local.
+        try:
+            self.salvar_rascunho(manual=False)
+        finally:
+            self._autosave_job = self.after(3000, self._agendar_autosalvamento)
+
+    def _restaurar_rascunho_inicial(self):
+        dados, atualizado_em = carregar_rascunho_db()
+        if not dados:
+            return
+
+        try:
+            # O rascunho é uma proteção temporária e não assume automaticamente
+            # que está vinculado a um registro do histórico.
+            self.boletim_id_atual = None
+
+            self.ent_numero.delete(0, "end")
+            self.ent_numero.insert(0, dados.get("numero", ""))
+
+            self.ent_local.delete(0, "end")
+            self.ent_local.insert(0, dados.get("local", "") or "Curitiba")
+
+            self.ent_inicio.delete(0, "end")
+            self.ent_inicio.insert(0, dados.get("data_inicio", ""))
+
+            self.ent_fim.delete(0, "end")
+            self.ent_fim.insert(0, dados.get("data_fim", ""))
+
+            partes = dados.get("partes") or []
+            for i, frame in enumerate(self.frames_partes):
+                if i < len(partes):
+                    frame.restaurar_rascunho(partes[i])
+
+            parte = dados.get("parte_atual", 0)
+            if not isinstance(parte, int) or parte < 0 or parte >= len(self.frames_partes):
+                parte = 0
+            self.mostrar_parte(parte)
+            self._atualizar_resumo()
+
+            if atualizado_em:
+                try:
+                    dt = datetime.fromisoformat(atualizado_em)
+                    quando = dt.strftime("%d/%m/%Y às %H:%M:%S")
+                except Exception:
+                    quando = atualizado_em
+                self.lbl_status.configure(text=f"Rascunho restaurado — último salvamento: {quando}.")
+            else:
+                self.lbl_status.configure(text="Rascunho anterior restaurado automaticamente.")
+        except Exception as e:
+            messagebox.showwarning(
+                "Rascunho",
+                "Foi encontrado um rascunho, mas não foi possível restaurá-lo completamente.\n\n"
+                f"Detalhes: {e}"
+            )
+
+    def _aplicar_dados_editor(self, dados, boletim_id=None):
+        """
+        Carrega no editor um rascunho ou um boletim salvo.
+        """
+        dados = dados or {}
+        self.boletim_id_atual = boletim_id
+
+        self.ent_numero.delete(0, "end")
+        self.ent_numero.insert(0, dados.get("numero", ""))
+
+        self.ent_local.delete(0, "end")
+        self.ent_local.insert(0, dados.get("local", "") or "Curitiba")
+
+        self.ent_inicio.delete(0, "end")
+        self.ent_inicio.insert(0, dados.get("data_inicio", ""))
+
+        self.ent_fim.delete(0, "end")
+        self.ent_fim.insert(0, dados.get("data_fim", ""))
+
+        partes = dados.get("partes") or []
+        for i, frame in enumerate(self.frames_partes):
+            if i < len(partes):
+                frame.restaurar_rascunho(partes[i])
+            else:
+                frame.restaurar_rascunho({})
+
+        parte = dados.get("parte_atual", 0)
+        if not isinstance(parte, int) or parte < 0 or parte >= len(self.frames_partes):
+            parte = 0
+
+        self.mostrar_parte(parte)
+        self._atualizar_resumo()
+
+    def salvar_boletim(self, manual=True):
+        numero = self.ent_numero.get().strip()
+        if not numero:
+            if manual:
+                messagebox.showwarning(
+                    "Número do boletim",
+                    "Informe o número do boletim antes de salvá-lo no histórico."
+                )
+                self.ent_numero.focus_set()
+            return False
+
+        try:
+            dados = self._dados_rascunho()
+            self.boletim_id_atual, atualizado = salvar_boletim_db(
+                dados, self.boletim_id_atual
+            )
+
+            # Mantém o rascunho sincronizado com a versão salva.
+            salvar_rascunho_db(dados)
+
+            hora = datetime.fromisoformat(atualizado).strftime("%d/%m/%Y às %H:%M:%S")
+            self.lbl_status.configure(
+                text=f"BI nº {numero} salvo no histórico em {hora}."
+            )
+
+            if manual:
+                messagebox.showinfo(
+                    "Boletim salvo",
+                    f"O BI nº {numero} foi salvo no histórico.\n\n"
+                    "Você poderá reabri-lo e continuar a edição quando quiser."
+                )
+            return True
+        except Exception as e:
+            if manual:
+                messagebox.showerror("Erro ao salvar boletim", str(e))
+            return False
+
+    def abrir_boletim_salvo(self, boletim_id, janela=None):
+        # Protege o trabalho atual antes de trocar de boletim.
+        self.salvar_rascunho(manual=False)
+
+        dados = carregar_boletim_db(boletim_id)
+        if not dados:
+            messagebox.showerror("Boletim", "Não foi possível carregar o boletim selecionado.")
+            return
+
+        self._aplicar_dados_editor(dados, boletim_id=boletim_id)
+        salvar_rascunho_db(self._dados_rascunho())
+
+        if janela is not None:
+            try:
+                janela.destroy()
+            except Exception:
+                pass
+
+        self.lbl_status.configure(
+            text=f"BI nº {self.ent_numero.get().strip()} aberto para edição."
+        )
+
+    def _gerar_boletim_salvo(self, boletim_id):
+        dados_editor = carregar_boletim_db(boletim_id)
+        if not dados_editor:
+            messagebox.showerror("Boletim", "Não foi possível carregar o boletim selecionado.")
+            return
+
+        dados = dados_documento_de_editor(dados_editor)
+
+        if not dados["numero"] or not dados["data_inicio"] or not dados["data_fim"]:
+            messagebox.showwarning(
+                "Dados incompletos",
+                "Esse boletim não possui número ou período completo."
+            )
+            return
+
+        nome_base = f"BI_{dados['numero']}"
+        caminho_docx = SAIDA_DIR / f"{nome_base}.docx"
+        caminho_pdf = SAIDA_DIR / f"{nome_base}.pdf"
+
+        try:
+            gerar_docx(dados, caminho_docx, atualizar_word=True)
+            gerar_pdf(dados, caminho_pdf, caminho_docx_existente=caminho_docx)
+            messagebox.showinfo(
+                "Boletim gerado",
+                "DOCX e PDF foram gerados novamente:\n\n"
+                f"{caminho_docx}\n{caminho_pdf}"
+            )
+        except Exception as e:
+            messagebox.showerror("Erro ao gerar documento", str(e))
+
+    def abrir_historico(self):
+        win = ModernDialog(self, "Boletins salvos", "1040x650")
+        frame = ctk.CTkFrame(win, fg_color="transparent")
+        frame.grid(row=0, column=0, sticky="nsew", padx=22, pady=22)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            frame,
+            text="Boletins salvos",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkLabel(
+            frame,
+            text="Abra um boletim antigo para continuar a edição ou gere novamente o DOCX/PDF.",
+            text_color=("gray45", "gray70"),
+        ).grid(row=1, column=0, sticky="w", pady=(2, 12))
+
+        busca_box = ctk.CTkFrame(frame, fg_color="transparent")
+        busca_box.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        busca_box.grid_columnconfigure(0, weight=1)
+
+        ent_busca = ctk.CTkEntry(
+            busca_box,
+            height=38,
+            corner_radius=9,
+            placeholder_text="Buscar por número, local ou data...",
+        )
+        ent_busca.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        tabela_box = ctk.CTkFrame(frame, corner_radius=12)
+        tabela_box.grid(row=3, column=0, sticky="nsew")
+        tabela_box.grid_rowconfigure(0, weight=1)
+        tabela_box.grid_columnconfigure(0, weight=1)
+
+        tree = ttk.Treeview(
+            tabela_box,
+            columns=("numero", "periodo", "local", "atualizado"),
+            show="headings",
+            style="Modern.Treeview",
+            selectmode="browse",
+        )
+        tree.heading("numero", text="BI")
+        tree.heading("periodo", text="Período")
+        tree.heading("local", text="Local")
+        tree.heading("atualizado", text="Última alteração")
+
+        tree.column("numero", width=90, anchor="center")
+        tree.column("periodo", width=240)
+        tree.column("local", width=170)
+        tree.column("atualizado", width=180)
+
+        scroll = ttk.Scrollbar(tabela_box, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        scroll.grid(row=0, column=1, sticky="ns", padx=(0, 10), pady=10)
+
+        def formatar_data_iso(valor):
+            try:
+                return datetime.fromisoformat(valor).strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                return valor or ""
+
+        def atualizar_lista(*_):
+            for item in tree.get_children():
+                tree.delete(item)
+
+            for row in listar_boletins_db(ent_busca.get()):
+                bid, numero, local, ini, fim, criado, atualizado = row
+                periodo = f"{ini or '...'} a {fim or '...'}"
+                tree.insert(
+                    "",
+                    "end",
+                    iid=str(bid),
+                    values=(
+                        numero,
+                        periodo,
+                        local or "",
+                        formatar_data_iso(atualizado),
+                    ),
+                )
+
+        def selecionado():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Boletins salvos", "Selecione um boletim.")
+                return None
+            return int(sel[0])
+
+        def abrir():
+            bid = selecionado()
+            if bid is not None:
+                self.abrir_boletim_salvo(bid, janela=win)
+
+        def duplicar():
+            bid = selecionado()
+            if bid is None:
+                return
+            novo_id = duplicar_boletim_db(bid)
+            if novo_id:
+                atualizar_lista()
+                tree.selection_set(str(novo_id))
+                tree.focus(str(novo_id))
+                messagebox.showinfo(
+                    "Boletim duplicado",
+                    "Foi criada uma cópia independente do boletim selecionado."
+                )
+
+        def excluir():
+            bid = selecionado()
+            if bid is None:
+                return
+
+            vals = tree.item(str(bid), "values")
+            numero = vals[0] if vals else ""
+
+            if not messagebox.askyesno(
+                "Excluir boletim",
+                f"Deseja excluir o BI nº {numero} do histórico?\n\n"
+                "Essa ação não apaga DOCX/PDF já gerados."
+            ):
+                return
+
+            excluir_boletim_db(bid)
+
+            if self.boletim_id_atual == bid:
+                self.boletim_id_atual = None
+
+            atualizar_lista()
+
+        def gerar():
+            bid = selecionado()
+            if bid is not None:
+                self._gerar_boletim_salvo(bid)
+
+        ent_busca.bind("<KeyRelease>", atualizar_lista)
+        tree.bind("<Double-1>", lambda e: abrir())
+
+        ctk.CTkButton(
+            busca_box,
+            text="Buscar",
+            width=90,
+            command=atualizar_lista,
+        ).grid(row=0, column=1)
+
+        botoes = ctk.CTkFrame(frame, fg_color="transparent")
+        botoes.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+
+        ctk.CTkButton(
+            botoes,
+            text="Abrir / Editar",
+            width=120,
+            fg_color=AZUL,
+            hover_color=AZUL_HOVER,
+            command=abrir,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            botoes,
+            text="Duplicar",
+            width=100,
+            command=duplicar,
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            botoes,
+            text="Gerar DOCX + PDF",
+            width=145,
+            command=gerar,
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            botoes,
+            text="Excluir",
+            width=90,
+            fg_color="#A83A3A",
+            hover_color="#8D2F2F",
+            command=excluir,
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            botoes,
+            text="Fechar",
+            width=90,
+            fg_color=("gray87", "gray26"),
+            hover_color=("gray79", "gray32"),
+            text_color=("gray20", "gray90"),
+            command=win.destroy,
+        ).pack(side="right")
+
+        atualizar_lista()
+        ent_busca.focus_set()
+
+
+    def novo_boletim(self):
+        if not messagebox.askyesno(
+            "Novo boletim",
+            "Deseja iniciar um novo boletim?\n\n"
+            "O rascunho atual será apagado."
+        ):
+            return
+
+        excluir_rascunho_db()
+        self.boletim_id_atual = None
+
+        self.ent_numero.delete(0, "end")
+        self.ent_local.delete(0, "end")
+        self.ent_local.insert(0, "Curitiba")
+        self.ent_inicio.delete(0, "end")
+        self.ent_fim.delete(0, "end")
+
+        for frame in self.frames_partes:
+            frame.itens = []
+            frame._atualizar_lista()
+            frame.limpar_campos()
+
+        self.mostrar_parte(0)
+        self._atualizar_resumo()
+        self.lbl_status.configure(text="Novo boletim iniciado.")
+
+        # Salva imediatamente o estado limpo.
+        self.salvar_rascunho(manual=False)
+
+    def _ao_fechar(self):
+        try:
+            if self._autosave_job is not None:
+                self.after_cancel(self._autosave_job)
+        except Exception:
+            pass
+
+        # Última tentativa de persistir inclusive o texto ainda não adicionado.
+        self.salvar_rascunho(manual=False)
+        self.destroy()
+
+
     def alternar_tema(self):
         modo = "Dark" if self.switch_tema.get() else "Light"
         ctk.set_appearance_mode(modo)
@@ -1283,6 +2066,14 @@ class App(ctk.CTk):
                 gerar_docx(dados, caminho_docx, atualizar_word=True)
                 gerar_pdf(dados, caminho_pdf, caminho_docx_existente=caminho_docx)
                 arquivos.extend([str(caminho_docx), str(caminho_pdf)])
+
+            # Documento gerado com sucesso: mantém também uma versão editável no histórico.
+            try:
+                self.boletim_id_atual, _ = salvar_boletim_db(
+                    self._dados_rascunho(), self.boletim_id_atual
+                )
+            except Exception:
+                pass
 
             self.lbl_status.configure(text="Documento gerado com sucesso.")
             messagebox.showinfo(

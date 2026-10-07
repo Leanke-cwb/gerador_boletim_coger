@@ -5,7 +5,7 @@ title Gerar instalador sem administrador - COGER
 cd /d "%~dp0"
 
 echo ============================================
-echo GERADOR DE INSTALADOR - COGER V6.7
+echo GERADOR DE INSTALADOR - COGER V6.9
 echo ============================================
 echo.
 
@@ -41,7 +41,7 @@ echo INSTALADOR CRIADO
 echo ============================================
 echo.
 echo Arquivo:
-echo instalador\Instalador_Gerador_Boletim_COGER_v6_7.exe
+echo instalador\Instalador_Gerador_Boletim_COGER_v6_9.exe
 echo.
 echo Esta versao instala no perfil do usuario e nao exige administrador.
 echo.

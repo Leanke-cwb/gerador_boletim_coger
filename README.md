@@ -254,3 +254,51 @@ Corrigido o erro:
 
 O módulo `gerar_docx.py` agora importa explicitamente `RGBColor` de `docx.shared`,
 mantendo a regra de documento oficial em texto preto.
+
+
+## v6.8 - Salvamento automático e recuperação de rascunho
+
+O boletim em edição agora é salvo automaticamente no banco SQLite local.
+
+### Proteção contra perda de conteúdo
+
+- salvamento automático a cada 3 segundos;
+- último salvamento ao fechar normalmente;
+- restauração automática na próxima abertura;
+- salva publicações já adicionadas;
+- salva também o texto que ainda está sendo digitado e que ainda não foi
+  adicionado como publicação;
+- preserva a parte atual;
+- preserva título/subtítulo em edição;
+- botão `Salvar rascunho agora`;
+- botão `Novo boletim`, com confirmação antes de apagar o rascunho.
+
+O rascunho é armazenado em:
+
+`%LOCALAPPDATA%\Gerador Boletim COGER\database\boletim.db`
+
+Portanto, uma falha do aplicativo não deve mais apagar o trabalho digitado.
+
+
+## v6.9 - Histórico e edição de boletins antigos
+
+A v6.9 adiciona um histórico permanente dos boletins.
+
+### Novos recursos
+
+- botão **Salvar boletim**;
+- tela **Boletins salvos**;
+- busca por número, local ou período;
+- abrir um boletim antigo e continuar a edição;
+- editar e salvar novamente o mesmo registro;
+- duplicar um boletim para criar uma nova versão;
+- excluir um boletim do histórico;
+- gerar novamente DOCX + PDF diretamente pelo histórico;
+- ao gerar um documento, o boletim também é salvo/atualizado automaticamente no histórico;
+- o salvamento automático de rascunho da v6.8 continua funcionando.
+
+Os boletins ficam armazenados no mesmo banco SQLite local:
+
+`%LOCALAPPDATA%\Gerador Boletim COGER\database\boletim.db`
+
+A exclusão no histórico não apaga DOCX ou PDF que já tenham sido gerados.
