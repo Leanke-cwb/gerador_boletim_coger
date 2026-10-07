@@ -1,0 +1,26 @@
+# Ambiente virtual
+venv/
+.env/
+env/
+.venv/
+build/
+dist/
+instalador/
+__pycache__/
+database/
+saida/
+vendor/tesseract/
+*.pyc
+*.db
+*.exe
+# Arquivos de compilação e cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Arquivos do VS Code
+.vscode/
+
+# Arquivos do sistema operacional
+.DS_Store
+Thumbs.db
