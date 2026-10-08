@@ -1,5 +1,5 @@
 #define MyAppName "Gerador de Boletim Interno - COGER"
-#define MyAppVersion "6.9"
+#define MyAppVersion "6.10"
 #define MyAppPublisher "COGER"
 #define MyAppExeName "Gerador_Boletim_COGER.exe"
 
@@ -15,7 +15,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 
 OutputDir=instalador
-OutputBaseFilename=Instalador_Gerador_Boletim_COGER_v6_9
+OutputBaseFilename=Instalador_Gerador_Boletim_COGER_v6_10
 
 Compression=lzma2
 SolidCompression=yes

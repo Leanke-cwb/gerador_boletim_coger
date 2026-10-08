@@ -4,7 +4,7 @@ echo ============================================
 echo GERADOR DE BOLETIM COGER V2 - INSTALACAO
 echo ============================================
 echo.
-python -m venv .venv
+py -m venv .venv
 call .venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt

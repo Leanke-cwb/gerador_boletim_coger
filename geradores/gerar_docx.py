@@ -308,6 +308,29 @@ def _paragrafo_texto(doc, texto, justify=True, first_indent=False, after=3):
     return p
 
 
+
+def _add_foto(doc, caminho, largura_max_cm=15.5):
+    """
+    Insere uma foto centralizada no BI, mantendo a proporção.
+    A largura máxima evita ultrapassar as margens do documento.
+    """
+    caminho = Path(caminho)
+    if not caminho.exists():
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = p.add_run("[Foto não encontrada]")
+        _fonte(r, 9, italico=True)
+        return
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after = Pt(6)
+
+    run = p.add_run()
+    run.add_picture(str(caminho), width=Cm(largura_max_cm))
+
+
 def _add_tabela(doc, dados):
     if not dados:
         return
@@ -451,6 +474,9 @@ def gerar_docx(dados, caminho, atualizar_word=True):
                         _paragrafo_texto(doc, linha, justify=True, first_indent=False)
                     else:
                         doc.add_paragraph()
+
+            for foto in item.get("fotos") or []:
+                _add_foto(doc, foto)
 
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(8)

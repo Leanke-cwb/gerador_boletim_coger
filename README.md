@@ -302,3 +302,31 @@ Os boletins ficam armazenados no mesmo banco SQLite local:
 `%LOCALAPPDATA%\Gerador Boletim COGER\database\boletim.db`
 
 A exclusão no histórico não apaga DOCX ou PDF que já tenham sido gerados.
+
+
+## v6.10 - Fotos dentro do Boletim Interno
+
+Agora cada publicação pode receber uma ou várias fotos.
+
+### Funcionamento
+
+- botão **Adicionar fotos** no editor de publicação;
+- permite selecionar várias imagens de uma só vez;
+- as fotos são copiadas para a biblioteca local do programa;
+- não dependem mais do arquivo original permanecer na mesma pasta;
+- podem acompanhar texto, título, subtítulo ou tabela OCR;
+- também é possível criar uma publicação composta apenas por foto;
+- as fotos são salvas junto com o rascunho e com o histórico do boletim;
+- ao reabrir um boletim antigo, as fotos continuam vinculadas;
+- DOCX e PDF inserem as fotos centralizadas e respeitando as margens;
+- imagens grandes são reduzidas automaticamente para evitar documentos excessivamente pesados.
+
+As cópias das fotos ficam em:
+
+`%LOCALAPPDATA%\Gerador Boletim COGER\fotos`
+
+Formatos de entrada aceitos:
+PNG, JPG, JPEG, BMP, TIF e TIFF.
+
+As imagens são normalizadas internamente para JPEG para garantir compatibilidade
+com Word, LibreOffice e python-docx.

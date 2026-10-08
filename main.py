@@ -8,9 +8,10 @@ from datetime import datetime
 from datetime import datetime
 import os
 import sys
+import uuid
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageOps
 from tkcalendar import Calendar
 
 from geradores.gerar_docx import gerar_docx
@@ -46,12 +47,14 @@ LOCAL_APP_DATA = Path(
 
 USER_DATA_DIR = LOCAL_APP_DATA / "Gerador Boletim COGER"
 DATABASE_DIR = USER_DATA_DIR / "database"
+FOTOS_DIR = USER_DATA_DIR / "fotos"
 
 DOCUMENTOS_DIR = Path.home() / "Documents"
 SAIDA_DIR = DOCUMENTOS_DIR / "Gerador Boletim COGER" / "Boletins"
 
 # Cria somente pastas em locais onde o usuário tem permissão de gravação.
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+FOTOS_DIR.mkdir(parents=True, exist_ok=True)
 SAIDA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATABASE_DIR / "boletim.db"
@@ -78,6 +81,41 @@ VERDE_HOVER = "#245A42"
 VERMELHO = "#A04444"
 VERMELHO_HOVER = "#873636"
 CINZA = "#6C7782"
+
+
+
+def importar_foto_para_biblioteca(caminho_origem):
+    """
+    Copia/normaliza a foto para a pasta gravável do aplicativo.
+    A imagem fica independente do local original escolhido pelo usuário.
+    """
+    origem = Path(caminho_origem)
+    if not origem.exists():
+        raise FileNotFoundError(f"Imagem não encontrada: {origem}")
+
+    destino = FOTOS_DIR / f"{uuid.uuid4().hex}.jpg"
+
+    with Image.open(origem) as img:
+        img = ImageOps.exif_transpose(img)
+
+        # JPEG não suporta alpha; converte sobre fundo branco.
+        if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+            base = Image.new("RGB", img.size, "white")
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+            base.paste(img, mask=img.getchannel("A"))
+            img = base
+        else:
+            img = img.convert("RGB")
+
+        # Evita imagens gigantes sem necessidade dentro do DOCX.
+        limite = 2400
+        if max(img.size) > limite:
+            img.thumbnail((limite, limite))
+
+        img.save(destino, "JPEG", quality=90, optimize=True)
+
+    return str(destino)
 
 
 def init_db():
@@ -504,6 +542,7 @@ class ParteView(ctk.CTkFrame):
         self.itens = []
         self.on_change = on_change
         self.editando_indice = None
+        self.fotos_editor = []
 
         self.grid_columnconfigure((0, 1), weight=1, uniform="cols")
         self.grid_rowconfigure(1, weight=1)
@@ -601,11 +640,49 @@ class ParteView(ctk.CTkFrame):
             font=("Segoe UI", 13),
             wrap="word",
         )
-        self.txt.grid(row=8, column=0, sticky="nsew", padx=18, pady=(6, 12))
+        self.txt.grid(row=8, column=0, sticky="nsew", padx=18, pady=(6, 10))
         self.txt.bind("<KeyRelease>", self._atualizar_contador)
 
+        fotos_box = ctk.CTkFrame(editor, fg_color="transparent")
+        fotos_box.grid(row=9, column=0, sticky="ew", padx=18, pady=(0, 10))
+        fotos_box.grid_columnconfigure(0, weight=1)
+
+        self.lbl_fotos = ctk.CTkLabel(
+            fotos_box,
+            text="Nenhuma foto adicionada",
+            text_color=("gray45", "gray70"),
+            font=ctk.CTkFont(size=11),
+        )
+        self.lbl_fotos.grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(
+            fotos_box,
+            text="Adicionar fotos",
+            width=112,
+            height=32,
+            corner_radius=9,
+            fg_color="transparent",
+            border_width=1,
+            border_color=AZUL,
+            text_color=AZUL,
+            hover_color=AZUL_CLARO,
+            command=self.adicionar_fotos,
+        ).grid(row=0, column=1, padx=(8, 0))
+
+        ctk.CTkButton(
+            fotos_box,
+            text="Limpar fotos",
+            width=96,
+            height=32,
+            corner_radius=9,
+            fg_color=("gray88", "gray26"),
+            hover_color=("gray80", "gray32"),
+            text_color=("gray20", "gray90"),
+            command=self.limpar_fotos,
+        ).grid(row=0, column=2, padx=(6, 0))
+
         acoes = ctk.CTkFrame(editor, fg_color="transparent")
-        acoes.grid(row=9, column=0, sticky="ew", padx=18, pady=(0, 10))
+        acoes.grid(row=10, column=0, sticky="ew", padx=18, pady=(0, 10))
         acoes.grid_columnconfigure(0, weight=1)
 
         self.btn_adicionar = ctk.CTkButton(
@@ -642,7 +719,7 @@ class ParteView(ctk.CTkFrame):
             text_color=AZUL,
             hover_color=AZUL_CLARO,
             command=self.importar_print,
-        ).grid(row=10, column=0, sticky="ew", padx=18, pady=(0, 18))
+        ).grid(row=11, column=0, sticky="ew", padx=18, pady=(0, 18))
 
         # Card lista
         lista_card = ctk.CTkFrame(self, corner_radius=14)
@@ -739,6 +816,66 @@ class ParteView(ctk.CTkFrame):
         n = len(self.txt.get("1.0", "end-1c"))
         self.lbl_chars.configure(text=f"{n} caracteres")
 
+    def _atualizar_fotos_label(self):
+        qtd = len(self.fotos_editor)
+        if qtd == 0:
+            texto = "Nenhuma foto adicionada"
+        elif qtd == 1:
+            texto = "1 foto adicionada"
+        else:
+            texto = f"{qtd} fotos adicionadas"
+        self.lbl_fotos.configure(text=texto)
+
+    def adicionar_fotos(self):
+        caminhos = filedialog.askopenfilenames(
+            title="Selecionar fotos para o boletim",
+            filetypes=[
+                ("Imagens", "*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff"),
+                ("Todos os arquivos", "*.*"),
+            ],
+        )
+        if not caminhos:
+            return
+
+        adicionadas = 0
+        erros = []
+        for caminho in caminhos:
+            try:
+                destino = importar_foto_para_biblioteca(caminho)
+                self.fotos_editor.append(destino)
+                adicionadas += 1
+            except Exception as e:
+                erros.append(f"{Path(caminho).name}: {e}")
+
+        self._atualizar_fotos_label()
+
+        try:
+            self.winfo_toplevel().salvar_rascunho(manual=False)
+        except Exception:
+            pass
+
+        if erros:
+            messagebox.showwarning(
+                "Fotos",
+                f"{adicionadas} foto(s) adicionada(s).\n\n"
+                "Algumas imagens não puderam ser importadas:\n" + "\n".join(erros[:5])
+            )
+
+    def limpar_fotos(self):
+        if not self.fotos_editor:
+            return
+        if messagebox.askyesno(
+            "Limpar fotos",
+            "Deseja retirar todas as fotos desta publicação?\n\n"
+            "Os arquivos do boletim já salvos no histórico não serão alterados até você salvar a publicação."
+        ):
+            self.fotos_editor = []
+            self._atualizar_fotos_label()
+            try:
+                self.winfo_toplevel().salvar_rascunho(manual=False)
+            except Exception:
+                pass
+
     def _nivel_atual(self):
         return "titulo" if self.cmb_nivel.get() == NIVEIS[0] else "subtitulo"
 
@@ -766,6 +903,9 @@ class ParteView(ctk.CTkFrame):
             nivel = "Título" if item.get("nivel") == "titulo" else "Subtítulo"
             if item.get("tipo") == "tabela":
                 nome += "  [Tabela OCR]"
+            qtd_fotos = len(item.get("fotos") or [])
+            if qtd_fotos:
+                nome += f"  [{qtd_fotos} foto" + ("]" if qtd_fotos == 1 else "s]")
             self.tree.insert("", "end", iid=str(idx), values=(rotulo, nivel, nome))
 
         if selecionar is not None and 0 <= selecionar < len(self.itens):
@@ -780,8 +920,11 @@ class ParteView(ctk.CTkFrame):
         titulo = self.ent_titulo.get().strip()
         texto = self.txt.get("1.0", "end").strip()
 
-        if not titulo and not texto:
-            messagebox.showwarning("Atenção", "Informe um título/subtítulo, um texto ou ambos.")
+        if not titulo and not texto and not self.fotos_editor:
+            messagebox.showwarning(
+                "Atenção",
+                "Informe um título/subtítulo, um texto, adicione uma foto ou combine esses conteúdos."
+            )
             return
 
         item = {
@@ -789,6 +932,7 @@ class ParteView(ctk.CTkFrame):
             "nivel": self._nivel_atual(),
             "titulo": titulo,
             "texto": texto,
+            "fotos": list(self.fotos_editor),
         }
 
         if self.editando_indice is None:
@@ -825,6 +969,9 @@ class ParteView(ctk.CTkFrame):
         self.txt.delete("1.0", "end")
         self.txt.insert("1.0", item.get("texto", ""))
         self._atualizar_contador()
+
+        self.fotos_editor = list(item.get("fotos") or [])
+        self._atualizar_fotos_label()
 
         self.btn_adicionar.configure(text="Salvar alteração")
         self.ent_titulo.focus_set()
@@ -874,6 +1021,7 @@ class ParteView(ctk.CTkFrame):
                 "texto": "",
                 "tabela": tabela,
                 "imagem_origem": caminho,
+                "fotos": list(self.fotos_editor),
             }
             self.itens.append(item)
             self._atualizar_lista(len(self.itens) - 1)
@@ -889,6 +1037,7 @@ class ParteView(ctk.CTkFrame):
                 "titulo": titulo,
                 "texto": texto,
                 "imagem_origem": caminho,
+                "fotos": list(self.fotos_editor),
             }
             self.itens.append(item)
             self._atualizar_lista(len(self.itens) - 1)
@@ -1072,6 +1221,8 @@ class ParteView(ctk.CTkFrame):
             pass
 
     def limpar_campos(self):
+        self.fotos_editor = []
+        self._atualizar_fotos_label()
         self.editando_indice = None
         self.cmb_nivel.set(NIVEIS[1])
         self.ent_titulo.delete(0, "end")
@@ -1091,6 +1242,7 @@ class ParteView(ctk.CTkFrame):
                 "titulo": self.ent_titulo.get(),
                 "texto": self.txt.get("1.0", "end-1c"),
                 "editando_indice": self.editando_indice,
+                "fotos": list(self.fotos_editor),
             },
         }
 
@@ -1108,6 +1260,9 @@ class ParteView(ctk.CTkFrame):
 
         self.txt.delete("1.0", "end")
         self.txt.insert("1.0", editor.get("texto", ""))
+
+        self.fotos_editor = list(editor.get("fotos") or [])
+        self._atualizar_fotos_label()
 
         idx = editor.get("editando_indice")
         if isinstance(idx, int) and 0 <= idx < len(self.itens):
